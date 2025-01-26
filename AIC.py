@@ -1,131 +1,229 @@
-import tkinter as tk
 import chess
-from PIL import Image, ImageTk
-import random
+import chess.engine
+import chess.svg
+from flask import Flask, render_template_string, request, jsonify
 
-# Initialize the chess board
-board = chess.Board()
+# Initialize Flask app
+app = Flask(__name__)
 
-# Create a dictionary for piece images
-piece_images = {
-    "K": "chess_images/white_king.png", "Q": "chess_images/white_queen.png", "R": "chess_images/white_rook.png",
-    "B": "chess_images/white_bishop.png", "N": "chess_images/white_knight.png", "P": "chess_images/white_pawn.png",
-    "k": "chess_images/black_king.png", "q": "chess_images/black_queen.png", "r": "chess_images/black_rook.png",
-    "b": "chess_images/black_bishop.png", "n": "chess_images/black_knight.png", "p": "chess_images/black_pawn.png"
-}
+# Stockfish engine path (updated)
+STOCKFISH_PATH = "your_file_path_goes_here!!!"
+engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
 
-# Function to load images
-def load_image(piece):
-    try:
-        image = Image.open(piece_images[piece])
-        image = image.resize((60, 60), Image.Resampling.LANCZOS)  # Resize with LANCZOS for high-quality resizing
-        return ImageTk.PhotoImage(image)
-    except Exception as e:
-        print(f"Error loading image for {piece}: {e}")
-        return None
+# HTML template for the web interface
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Chess Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 36px;
+            color: #444;
+        }
+        #game-container {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 40px;
+            margin-top: 20px;
+        }
+        #instructions {
+            max-width: 300px;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        #instructions ul {
+            text-align: left;
+            margin: 0;
+            padding-left: 20px;
+        }
+        #instructions h3 {
+            margin-bottom: 10px;
+        }
+        #controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+        }
+        #board-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #board {
+            margin: 10px auto;
+        }
+        input {
+            font-size: 16px;
+            width: 300px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        button {
+            font-size: 16px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background-color: #0078d7;
+            color: white;
+            margin: 5px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        button:hover {
+            background-color: #005ea2;
+        }
+        svg {
+            width: 400px;
+            height: auto;
+        }
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Chess Game</h1>
+    <div id="game-container">
+        <div id="instructions">
+            <h3>How to Play:</h3>
+            <p>
+                - Enter your move in UCI (Universal Chess Interface) format.<br>
+                - Examples:
+                <ul>
+                    <li><strong>e2e4</strong>: Move a piece from e2 to e4.</li>
+                    <li><strong>g1f3</strong>: Move a knight from g1 to f3.</li>
+                </ul>
+                - After your move, the AI will make its move automatically after a short delay.<br>
+                - Press "Reset Game" to restart the game at any time.
+            </p>
+        </div>
+        <div id="board-container">
+            <div id="board"></div>
+            <p id="status">Game in progress...</p>
+        </div>
+        <div id="controls">
+            <input type="text" id="user-move" placeholder="Enter your move (e.g., e2e4)">
+            <button onclick="makeUserMove()">Make Move</button>
+            <button onclick="resetGame()">Reset Game</button>
+        </div>
+    </div>
 
-# Create the main window
-window = tk.Tk()
-window.title("Chess Game")
+    <script>
+        async function updateBoard() {
+            const response = await fetch('/board');
+            const data = await response.json();
+            document.getElementById('board').innerHTML = data.svg;
+            document.getElementById('status').innerText = data.status;
+        }
 
-# Initialize a canvas for drawing the board
-canvas = tk.Canvas(window, width=480, height=480)
-canvas.pack()
+        async function makeUserMove() {
+            const move = document.getElementById('user-move').value;
+            const response = await fetch('/user-move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ move }),
+            });
 
-# To store the selected square
-selected_square = None
+            if (response.ok) {
+                document.getElementById('user-move').value = '';
+                updateBoard();
+                setTimeout(() => makeAIMove(), 2000);  // Delay AI move by 2 seconds
+            } else {
+                alert('Invalid move. Try again.');
+            }
+        }
 
-# To store the image references and prevent garbage collection
-image_references = {}
+        async function makeAIMove() {
+            await fetch('/ai-move', { method: 'POST' });
+            updateBoard();
+        }
 
-# Draw the chessboard with dark blue and light blue squares
-def draw_board():
-    for row in range(8):
-        for col in range(8):
-            # Alternate between dark blue and light blue for the board squares
-            color = "dark blue" if (row + col) % 2 == 0 else "light blue"
-            canvas.create_rectangle(col*60, row*60, (col+1)*60, (row+1)*60, fill=color)
+        async function resetGame() {
+            await fetch('/reset', { method: 'POST' });
+            updateBoard();
+        }
 
+        updateBoard();
+    </script>
+</body>
+</html>
+"""
 
-# Draw the pieces on the board
-def draw_pieces():
-    global image_references  # We need this to keep track of images and prevent garbage collection
-    image_references.clear()  # Clear previous references
-    for square in chess.SQUARES:
-        piece = board.piece_at(square)
-        if piece:
-            piece_str = piece.symbol()
-            image = load_image(piece_str)
-            if image:  # Ensure image was loaded
-                row, col = divmod(square, 8)
-                x_center = col * 60 + 30  # Center position on the square
-                y_center = row * 60 + 30  # Center position on the square
-                
-                # Draw a border around the piece
-                canvas.create_rectangle(x_center - 32, y_center - 32, x_center + 32, y_center + 32, outline="black", width=2)
+# Initialize chess board
+game_board = chess.Board()
 
-                # Place the piece image inside the square
-                canvas.create_image(x_center, y_center, image=image)
-                
-                image_references[square] = image  # Store the image reference
+@app.route("/")
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
-# Handle player moves
-def make_move(event):
-    global selected_square
+@app.route("/board")
+def get_board():
+    board_svg = chess.svg.board(game_board)
+    status = "Game in progress..."
+    if game_board.is_checkmate():
+        status = "Checkmate! Game over."
+    elif game_board.is_stalemate():
+        status = "Stalemate! Game over."
+    elif game_board.is_insufficient_material():
+        status = "Draw due to insufficient material."
+    elif game_board.is_game_over():
+        status = "Game over!"
 
-    # Get the row and column of the clicked square
-    col, row = event.x // 60, event.y // 60
-    square = row * 8 + col  # Convert to square index
+    return jsonify({"svg": board_svg, "status": status})
 
-    if selected_square is None:
-        # Store the first square selected by the player (starting square)
-        selected_square = square
-    else:
-        # Ensure the start and end squares are different
-        if selected_square == square:
-            selected_square = None  # Reset selected square if the same square is clicked again
-            return  # Do nothing if the same square is clicked again
-        
-        # Convert the starting and ending squares to UCI format (e.g., e2e4)
-        start_square = selected_square
-        end_square = square
-        
-        # Calculate UCI coordinates from the square index
-        start_file = chr(start_square % 8 + ord('a'))  # 'a' to 'h'
-        start_rank = 8 - (start_square // 8)  # 1 to 8
-        end_file = chr(end_square % 8 + ord('a'))  # 'a' to 'h'
-        end_rank = 8 - (end_square // 8)  # 1 to 8
+@app.route("/user-move", methods=["POST"])
+def user_move():
+    global game_board
+    if not game_board.is_game_over():
+        data = request.get_json()
+        move = data.get("move")
 
-        # Create UCI string (e.g., "e2e4")
-        uci_move = f"{start_file}{start_rank}{end_file}{end_rank}"
-        
-        # Validate the move before applying it
         try:
-            move = chess.Move.from_uci(uci_move)
-            if move in board.legal_moves:
-                board.push(move)
-                draw_board()
-                draw_pieces()
-        except chess.InvalidMoveError:
-            print(f"Invalid move: {uci_move}")
-        
-        selected_square = None  # Reset selected square for the next move
+            chess_move = chess.Move.from_uci(move)
+            if chess_move in game_board.legal_moves:
+                game_board.push(chess_move)
+                return "", 204
+            else:
+                return "Invalid move", 400
+        except ValueError:
+            return "Invalid move format", 400
+    else:
+        return "Game over", 400
 
-# AI move using random move for simplicity
+@app.route("/ai-move", methods=["POST"])
 def ai_move():
-    # Find random legal move for the AI
-    legal_moves = list(board.legal_moves)
-    move = random.choice(legal_moves)
-    board.push(move)
-    draw_board()
-    draw_pieces()
+    global game_board
+    if not game_board.is_game_over():
+        result = engine.play(game_board, chess.engine.Limit(time=0.5))
+        game_board.push(result.move)
+    return "", 204
 
-# Add event binding for mouse click
-canvas.bind("<Button-1>", make_move)
+@app.route("/reset", methods=["POST"])
+def reset_game():
+    global game_board
+    game_board = chess.Board()
+    return "", 204
 
-# Initial drawing of the board and pieces
-draw_board()
-draw_pieces()
-
-# Run the Tkinter event loop
-window.mainloop()
+if __name__ == "__main__":
+    try:
+        app.run(debug=True)
+    finally:
+        engine.quit()
